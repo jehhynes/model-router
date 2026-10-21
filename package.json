@@ -1,0 +1,12 @@
+{
+  "name": "model-router",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Routes Claude Code and Codex model calls to CLIProxyAPI while the clients keep their subscription logins.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/main.mjs",
+    "test": "node --test"
+  }
+}

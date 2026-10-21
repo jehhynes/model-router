@@ -1,0 +1,10 @@
+[Unit]
+Description=Routes Claude Code and Codex model calls to CLIProxyAPI
+
+[Service]
+ExecStart="@NODE@" "@REPO@/src/main.mjs"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
