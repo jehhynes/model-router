@@ -397,6 +397,8 @@ describe('websocket upgrade', () => {
       reply += d;
       socket.write('more');
     });
+    // A write after the router's FIN gets a reset only when the router has closed its side, not just sent FIN.
+    socket.on('end', () => socket.write('more'));
     await closed;
     assert.match(reply, /^HTTP\/1\.1 502/);
   });
