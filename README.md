@@ -47,7 +47,7 @@ Claude Code reports `authMethod: "claude.ai"` in `claude auth status` only when 
 Requires Node 22 or later.
 
 - Windows: run `pwsh -File install/windows.ps1` from an elevated PowerShell. It registers the `model-router` scheduled task, which runs at logon as your account without a window (S4U, which needs the "Log on as a batch job" right that administrators have) and restarts the router 5 seconds after it exits, then waits until the router listens. `-Uninstall` removes it.
-- Linux: `install/linux.sh` installs and starts the `model-router.service` systemd user service, with the absolute path of the `node` on your PATH. `--uninstall` removes it.
+- Linux: `install/linux.sh` installs and starts the `model-router.service` systemd user service. The service runs `install/run.sh`. With nvm installed (in `NVM_DIR` at install time, `~/.nvm` by default), it uses the `node` that nvm's default alias names, or the newest installed `node` when that alias names a removed version, so installing or removing Node versions with nvm does not break it while at least one Node 22 or later stays installed. Without nvm it uses the absolute path of the `node` that was on your PATH at install time. Paths containing `& | \ " ' % $ @` or line breaks are not supported. `--uninstall` removes it.
 
 ## Client configuration
 

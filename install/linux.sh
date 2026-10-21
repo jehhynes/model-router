@@ -15,10 +15,21 @@ fi
 [[ -f "$repo/config.json" ]] || { echo "Create $repo/config.json from config.json.example first." >&2; exit 1; }
 [[ -f "$repo/.env" ]] || { echo "Create $repo/.env from .env.example first." >&2; exit 1; }
 node="$(command -v node)" || { echo "node is not on PATH." >&2; exit 1; }
+nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+
+# These characters would need escaping for sed or have meaning in a systemd unit; @ could form a placeholder.
+for path in "$repo" "$node" "$nvm_dir"; do
+  if [[ "$path" == *[\&\|\\\"\'%\$@]* || "$path" == *$'\n'* ]]; then
+    echo "Paths with & | \\ \" ' % \$ @ or line breaks are not supported: $path" >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$unit_dir"
-sed -e "s|@NODE@|$node|" -e "s|@REPO@|$repo|" "$repo/install/model-router.service" > "$unit_dir/model-router.service"
+sed -e "s|@NODE@|$node|" -e "s|@NVM_DIR@|$nvm_dir|" -e "s|@REPO@|$repo|" "$repo/install/model-router.service" > "$unit_dir/model-router.service"
 systemctl --user daemon-reload
-systemctl --user enable --now model-router.service
+systemctl --user enable model-router.service
+# restart, not start, so a reinstall replaces a running router.
+systemctl --user restart model-router.service
 systemctl --user is-active --quiet model-router.service
 echo "Installed and started model-router.service."
