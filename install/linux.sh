@@ -12,6 +12,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   exit 0
 fi
 
+[[ -f "$repo/config.json" ]] || { echo "Create $repo/config.json from config.json.example first." >&2; exit 1; }
 [[ -f "$repo/.env" ]] || { echo "Create $repo/.env from .env.example first." >&2; exit 1; }
 node="$(command -v node)" || { echo "node is not on PATH." >&2; exit 1; }
 

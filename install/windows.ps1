@@ -17,6 +17,9 @@ if ($Uninstall) {
     return
 }
 
+if (-not (Test-Path (Join-Path $root 'config.json'))) {
+    throw "Create $root\config.json from config.json.example first."
+}
 if (-not (Test-Path (Join-Path $root '.env'))) {
     throw "Create $root\.env from .env.example first."
 }

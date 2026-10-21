@@ -1,12 +1,14 @@
 {
   "logFile": "model-router.log",
+  "logMaxBytes": 10485760,
+  "logMaxFiles": 5,
   "listeners": [
     {
       "name": "claude",
       "port": 8318,
       "passthrough": "https://api.anthropic.com",
       "model": {
-        "upstream": "http://liberty-linux:8317",
+        "upstream": "http://127.0.0.1:8317",
         "apiKeyEnv": "CLAUDE_API_KEY",
         "paths": ["/v1/messages"]
       }
@@ -16,7 +18,7 @@
       "port": 8319,
       "passthrough": null,
       "model": {
-        "upstream": "http://liberty-linux:8317",
+        "upstream": "http://127.0.0.1:8317",
         "apiKeyEnv": "CODEX_API_KEY",
         "paths": ["/v1/"]
       }

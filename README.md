@@ -28,11 +28,13 @@ Claude Code reports `authMethod: "claude.ai"` in `claude auth status` only when 
 
 ## Configuration
 
-[config.json](config.json) holds the listeners. The CLIProxyAPI client keys go in `.env` in the repository root, which git ignores; copy [.env.example](.env.example).
+`config.json` in the repository root holds the listeners; copy [config.json.example](config.json.example), which sends model calls to CLIProxyAPI on `127.0.0.1:8317`, and change the upstreams if CLIProxyAPI runs elsewhere. The CLIProxyAPI client keys go in `.env`; copy [.env.example](.env.example). Git ignores both files.
 
 | Field | Meaning |
 |---|---|
 | `logFile` | File the router appends one line per request to, relative to the repository root; stdout when omitted |
+| `logMaxBytes` | Largest size of the log file, a whole number from 1 to 9007199254740991; default 10485760 (10 MB). Before a line would take the file past it, the file becomes `<logFile>.1`, the previous `.1` becomes `.2`, and so on. A line larger than the limit is still written, to an empty file |
+| `logMaxFiles` | Number of those older files to keep, a whole number from 0 to 1000; default 5. Older ones are deleted, and 0 deletes the full log file. If the log file cannot be renamed, for example because another program on Windows holds it open, the router keeps appending to it and tries again with the next line |
 | `listeners[].name` | Name shown in the log |
 | `listeners[].port` | Port on 127.0.0.1 |
 | `listeners[].passthrough` | Upstream for non-model paths, or `null` for 404 |
