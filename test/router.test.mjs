@@ -3,7 +3,8 @@ import http from 'node:http';
 import net from 'node:net';
 import { once } from 'node:events';
 import { after, before, describe, it } from 'node:test';
-import { createRouter, selectRoute } from '../src/router.mjs';
+import zlib from 'node:zlib';
+import { createRouter, hideModels, modelMatcher, selectRoute } from '../src/router.mjs';
 
 const KEY = 'proxy-key';
 
@@ -263,6 +264,124 @@ describe('router', () => {
     } finally {
       close(r);
     }
+  });
+});
+
+describe('modelMatcher', () => {
+  it('matches whole names, with * for any characters', () => {
+    const isHidden = modelMatcher(['claude-*', 'gpt-6.1-sol']);
+    assert.equal(isHidden('claude-opus-5-5'), true);
+    assert.equal(isHidden('gpt-6.1-sol'), true);
+    assert.equal(isHidden('gpt-6x1-sol'), false, 'a dot is literal');
+    assert.equal(isHidden('my-claude-model'), false);
+    assert.equal(isHidden('gpt-6.1-sol-mini'), false);
+    assert.equal(isHidden(undefined), false);
+  });
+
+  it('matches nothing without patterns', () => {
+    assert.equal(modelMatcher([])('claude-opus-5-5'), false);
+  });
+});
+
+describe('hideModels', () => {
+  const isHidden = modelMatcher(['claude-*']);
+
+  it('removes hidden models from both list formats and keeps other fields', () => {
+    const body = JSON.stringify({
+      object: 'list',
+      data: [{ id: 'gpt-6-sol' }, { id: 'claude-opus-5-5' }],
+      models: [{ slug: 'claude-fable-5-2' }, { slug: 'gpt-6-luna', priority: 1 }],
+    });
+    assert.deepEqual(JSON.parse(hideModels(body, isHidden)), {
+      object: 'list',
+      data: [{ id: 'gpt-6-sol' }],
+      models: [{ slug: 'gpt-6-luna', priority: 1 }],
+    });
+  });
+
+  it('returns null for a body that is not a JSON object', () => {
+    assert.equal(hideModels('not json', isHidden), null);
+    assert.equal(hideModels('[]', isHidden), null);
+    assert.equal(hideModels('null', isHidden), null);
+  });
+});
+
+describe('model list', () => {
+  const LIST = { data: [{ id: 'gpt-6-sol' }, { id: 'claude-opus-5-5' }], models: [{ slug: 'gpt-6-luna' }, { slug: 'claude-fable-5-2' }] };
+  const model = upstream({
+    '/v1/models': (req, res) => {
+      const headers = { 'content-type': 'application/json', etag: '"full"', 'x-codex-primary-used-percent': '99' };
+      if (req.headers['accept-encoding'] === 'gzip')
+        return res.writeHead(200, { ...headers, 'content-encoding': 'gzip' }).end(zlib.gzipSync(JSON.stringify(LIST)));
+      res.writeHead(200, headers).end(JSON.stringify(LIST));
+    },
+    '/v1/bad/models': (req, res) => res.writeHead(200).end('oops'),
+    '/v1/gzip/models': (req, res) => res.writeHead(200, { 'content-encoding': 'gzip' }).end(zlib.gzipSync(JSON.stringify(LIST))),
+    '/v1/missing/models': (req, res) => res.writeHead(404, { 'content-type': 'application/json' }).end('{"error":"none"}'),
+  });
+  const lines = [];
+  let router, plain, base, plainBase;
+
+  before(async () => {
+    const modelUrl = await listen(model.server);
+    const listener = { name: 'codex', passthrough: null, model: { upstream: modelUrl, apiKey: KEY, paths: ['/v1/'] } };
+    router = createRouter({ ...listener, model: { ...listener.model, hiddenModels: ['claude-*'] } }, line => lines.push(line));
+    plain = createRouter(listener);
+    base = await listen(router);
+    plainBase = await listen(plain);
+  });
+
+  after(() => close(router, plain, model.server));
+
+  it('removes hidden models, asks for the list uncompressed and in full, and drops the ETag', async () => {
+    const res = await request(base, '/v1/models?client_version=0.167.0', { headers: { 'accept-encoding': 'gzip', 'if-none-match': '"old"' } });
+    assert.equal(res.status, 200);
+    assert.deepEqual(JSON.parse(res.body), { data: [{ id: 'gpt-6-sol' }], models: [{ slug: 'gpt-6-luna' }] });
+    assert.equal(res.headers['content-length'], String(Buffer.byteLength(res.body)));
+    assert.equal(res.headers.etag, undefined);
+    assert.equal(res.headers['x-codex-primary-used-percent'], undefined);
+    const seen = model.seen.at(-1);
+    assert.equal(seen.url, '/v1/models?client_version=0.167.0');
+    assert.equal(seen.headers['accept-encoding'], 'identity');
+    assert.equal(seen.headers['if-none-match'], undefined);
+  });
+
+  it('sends the list unchanged without hidden models', async () => {
+    const res = await request(plainBase, '/v1/models', { headers: { 'if-none-match': '"old"' } });
+    assert.deepEqual(JSON.parse(res.body), LIST);
+    assert.equal(res.headers.etag, '"full"');
+    assert.equal(model.seen.at(-1).headers['if-none-match'], '"old"');
+  });
+
+  it('leaves other paths and methods alone', async () => {
+    await request(base, '/v1/responses', { method: 'POST', headers: { 'accept-encoding': 'gzip' }, body: '{}' });
+    assert.equal(model.seen.at(-1).headers['accept-encoding'], 'gzip');
+    const res = await request(base, '/v1/models', { method: 'POST', body: '{}' });
+    assert.deepEqual(JSON.parse(res.body), LIST);
+  });
+
+  it('sends a body that is not a JSON object unchanged and logs it', async () => {
+    const res = await request(base, '/v1/bad/models');
+    assert.equal(res.body, 'oops');
+    assert.match(lines.at(-1), /GET \/v1\/bad\/models -> model 200 .*not a JSON object; sent unchanged/);
+  });
+
+  it('sends a list the upstream compressed anyway unchanged and logs it', async () => {
+    const res = await new Promise((resolve, reject) => {
+      http.get(new URL('/v1/gzip/models', base), r => {
+        const chunks = [];
+        r.on('data', c => chunks.push(c)).on('end', () => resolve({ headers: r.headers, body: Buffer.concat(chunks) }));
+      }).on('error', reject);
+    });
+    assert.equal(res.headers['content-encoding'], 'gzip');
+    assert.deepEqual(JSON.parse(zlib.gunzipSync(res.body)), LIST);
+    assert.match(lines.at(-1), /model list sent unchanged: content-encoding gzip/);
+  });
+
+  it('passes an error status through unchanged', async () => {
+    const res = await request(base, '/v1/missing/models');
+    assert.equal(res.status, 404);
+    assert.equal(res.body, '{"error":"none"}');
   });
 });
 

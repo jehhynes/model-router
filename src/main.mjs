@@ -27,6 +27,11 @@ const log = createLog({
 });
 
 for (const listener of config.listeners) {
+  const hidden = listener.model.hiddenModels;
+  if (hidden !== undefined && !(Array.isArray(hidden) && hidden.every(p => typeof p === 'string' && p !== ''))) {
+    console.error(`listeners[].model.hiddenModels of ${listener.name} in ${configPath} must be a list of non-empty strings.`);
+    process.exit(1);
+  }
   const apiKey = process.env[listener.model.apiKeyEnv];
   if (!apiKey) {
     log(`${listener.name}: ${listener.model.apiKeyEnv} is not set in ${envPath}`);

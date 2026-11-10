@@ -10,6 +10,7 @@ Each listener has model paths and an optional passthrough upstream:
 - Any other request goes to the passthrough upstream with its end-to-end headers unchanged, or gets a 404 when the listener has no passthrough.
 - The request target is forwarded as received, so the router and the upstream see the same path. A target that is not a path gets a 400.
 - Responses from the model upstream lose their subscription limit headers (`anthropic-ratelimit-unified-*`, `x-codex-primary-*`, `x-codex-secondary-*`, `x-codex-credits-*`, `x-codex-active-limit`, `x-codex-rate-limit-*`, `x-codex-limit-name`, `x-codex-promo-*`), and model WebSocket connections lose their `codex.rate_limits` messages, because the clients would apply the upstream account's limits to their own login. Model WebSocket upgrades are sent without `Sec-WebSocket-Extensions`, so messages arrive uncompressed and can be read. Codex 0.163.0 ignores `codex.rate_limits` events in SSE streams, so the router does not filter those.
+- A `GET` to a model path ending in `/models` on a listener with `hiddenModels` asks the upstream for an uncompressed list without `If-None-Match`, and the router removes the matching entries before answering: `data[].id` in the OpenAI format and `models[].slug` in the Codex format that a `client_version` query returns. The response loses its `ETag`, which names the full list. A list that is not a JSON object, or that the upstream compresses anyway, is sent unchanged and noted in the log. CLIProxyAPI lists every provider's models to every client key, so this keeps Claude models out of Codex's model picker. Requests that name a hidden model still go through.
 - A 401 or 403 from the model upstream becomes a 502 naming the upstream, because the clients would otherwise treat it as their own login failing and refresh or prompt for sign-in.
 - Streamed responses and WebSocket upgrades are relayed as they arrive. When the upstream closes a response early, the client's response is closed too.
 
@@ -41,6 +42,7 @@ Claude Code reports `authMethod: "claude.ai"` in `claude auth status` only when 
 | `listeners[].model.upstream` | CLIProxyAPI origin, without a path |
 | `listeners[].model.apiKeyEnv` | Name of the `.env` variable that holds the CLIProxyAPI client key |
 | `listeners[].model.paths` | Path prefixes routed to the model upstream; `/v1/messages` matches itself and `/v1/messages/...`, and `/v1/` matches everything under it |
+| `listeners[].model.hiddenModels` | Optional model names removed from model lists, such as `["claude-*"]`; `*` matches any characters |
 
 ## Install
 

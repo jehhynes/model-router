@@ -20,7 +20,8 @@
       "model": {
         "upstream": "http://127.0.0.1:8317",
         "apiKeyEnv": "CODEX_API_KEY",
-        "paths": ["/v1/"]
+        "paths": ["/v1/"],
+        "hiddenModels": ["claude-*"]
       }
     }
   ]

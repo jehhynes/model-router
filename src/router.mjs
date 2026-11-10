@@ -23,6 +23,38 @@ const isLimitMessage = text => parseType(text) === 'codex.rate_limits';
 const HANDSHAKE_TIMEOUT_MS = 30_000;
 const MAX_EARLY_BYTES = 1024 * 1024;
 
+/** Whether a GET request lists models, so the router removes the listener's hidden models from the answer. */
+export function listsModels(listener, route, method, path) {
+  return route.kind === 'model' && method === 'GET' && listener.model.hiddenModels?.length > 0 && path.split('?', 1)[0].endsWith('/models');
+}
+
+/** A test for model names; `*` in a pattern matches any characters. */
+export function modelMatcher(patterns) {
+  const escape = text => text.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  const res = patterns.map(p => new RegExp(`^${p.split('*').map(escape).join('.*')}$`));
+  return name => typeof name === 'string' && res.some(re => re.test(name));
+}
+
+/**
+ * Removes hidden models from a model list: `data[].id` in the OpenAI format, and `models[].slug` in the Codex format that
+ * a `client_version` query returns. Returns null when the body is not a JSON object.
+ */
+export function hideModels(body, isHidden) {
+  let list;
+  try {
+    list = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (list === null || typeof list !== 'object' || Array.isArray(list))
+    return null;
+  if (Array.isArray(list.data))
+    list.data = list.data.filter(m => !isHidden(m?.id));
+  if (Array.isArray(list.models))
+    list.models = list.models.filter(m => !isHidden(m?.slug));
+  return JSON.stringify(list);
+}
+
 function parseType(text) {
   try {
     return JSON.parse(text)?.type;
@@ -102,6 +134,7 @@ function send(route, req, headers) {
 const isOriginForm = url => typeof url === 'string' && url.startsWith('/') && !url.startsWith('//');
 
 export function createRouter(listener, log = () => {}) {
+  const isHidden = modelMatcher(listener.model.hiddenModels ?? []);
   const server = http.createServer((req, res) => {
     const started = Date.now();
     const route = isOriginForm(req.url) ? selectRoute(listener, req.url) : null;
@@ -122,9 +155,16 @@ export function createRouter(listener, log = () => {}) {
     if (!route)
       return fail(404, `no route for ${req.url}`);
 
+    const filter = listsModels(listener, route, req.method, req.url);
+    const headers = upstreamRequestHeaders(req.headers, route);
+    // The router reads the list, so it asks for it uncompressed and in full.
+    if (filter) {
+      headers['accept-encoding'] = 'identity';
+      delete headers['if-none-match'];
+    }
     let upstream;
     try {
-      upstream = send(route, req, upstreamRequestHeaders(req.headers, route));
+      upstream = send(route, req, headers);
     } catch (err) {
       return fail(502, `cannot reach ${route.upstream}: ${err.message}`);
     }
@@ -134,10 +174,33 @@ export function createRouter(listener, log = () => {}) {
         up.resume();
         return fail(502, `the model upstream ${route.upstream} rejected its API key with ${up.statusCode}`);
       }
+      const encoding = String(up.headers['content-encoding'] ?? 'identity').toLowerCase();
+      if (filter && up.statusCode === 200 && encoding === 'identity')
+        return sendFiltered(up);
+      const note = filter && up.statusCode === 200 ? ` (model list sent unchanged: content-encoding ${encoding})` : '';
       res.writeHead(up.statusCode, up.statusMessage, clientResponseHeaders(up.headers, route));
       // pipeline destroys the client response when the upstream response ends early.
-      pipeline(up, res, err => done(up.statusCode, err ? ` (${err.message})` : ''));
+      pipeline(up, res, err => done(up.statusCode, err ? ` (${err.message})` : note));
     });
+
+    const sendFiltered = async up => {
+      const chunks = [];
+      try {
+        for await (const chunk of up)
+          chunks.push(chunk);
+      } catch (err) {
+        return res.destroy(err);
+      }
+      const body = Buffer.concat(chunks).toString('utf8');
+      const filtered = hideModels(body, isHidden);
+      const out = clientResponseHeaders(up.headers, route);
+      // The upstream's ETag names the unfiltered list.
+      for (const name of ['content-length', 'etag'])
+        delete out[name];
+      const sent = filtered ?? body;
+      res.writeHead(up.statusCode, up.statusMessage, { ...out, 'content-length': Buffer.byteLength(sent) });
+      res.end(sent, () => done(up.statusCode, filtered === null ? ' (model list is not a JSON object; sent unchanged)' : ''));
+    };
 
     upstream.on('error', err => {
       if (res.headersSent)
